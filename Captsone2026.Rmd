@@ -1,0 +1,473 @@
+---
+title: 'DSC-280 Capstone Project'
+subtitle: 'Using Linear Regression and Analysis to Discover Prominent Predictors of Price in Luxury and Non-Luxury Diamonds'
+author: 'Zackery Jones'
+date: "05-11-2026"
+output:
+  beamer_presentation: 
+    theme: PaloAlto
+    colortheme: orchid
+    fonttheme: structurebold
+    latex_engine: xelatex
+  slidy_presentation:
+    incremental: false
+fontsize: 10pt
+mainfont: Arial
+header-includes:
+- \usepackage{xcolor}
+- \definecolor{accent}{HTML}{004C99}
+- \setbeamercolor{structure}{fg=accent}
+- \setbeamertemplate{footline}[frame number]
+- \setbeamertemplate{section page}[none]
+- \AtBeginSection{}
+- \setlength{\parskip}{6pt}
+- \setlength{\parindent}{0pt}
+- \usepackage{listings}
+- \lstset{basicstyle=\ttfamily\scriptsize, breaklines=true, columns=fullflexible,
+  frame=single, backgroundcolor=\color{gray!5}}
+- \setkeys{Gin}{width=0.75\linewidth,keepaspectratio}
+- \AtBeginEnvironment{verbatim}{\scriptsize}
+- \AtBeginEnvironment{alltt}{\scriptsize}
+- \setbeamerfont{itemize/enumerate body}{size=\scriptsize}
+- \setbeamerfont{itemize/enumerate subbody}{size=\scriptsize}
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(tidyverse)
+library(skimr)
+library(rpart)
+library(rpart.plot)
+library(corrplot)
+library(ggplot2)
+library(dplyr)
+data("diamonds")
+```
+
+## Table of Contents
+
+### 1) Introduction, Data Preparation, and Feature Engineering
+### 2) Exploratory Data Analysis
+### 3) Multiple Linear Regression Modeling
+### 4) Model Evaluation and Comparison
+### 5) Reccomendations and Reflections
+### 6) Conclusion and Next Steps
+
+## 1) Introduction
+
+### The Problem: The diamond industry is a large one, and it can be quite costly to run a company that focuses on selling diamonds considering how expensive they can be. 
+
+- This means that more than some other industries, it's incredibly important for a diamond company to know how to price and market the diamonds that they acquire in order to make a profit.
+
+### The Goal: By identifying what aspects of a diamond correlate to how they are priced, companies and their shareholders can get a grasp on not only how to price the diamonds they obtain.
+
+- They may even use this knowledge to seek out diamonds that may be either luxury ones or more affordable ones, depending on the specific market that they want to address.
+
+## Introduction-Dataset
+
+### The Diamonds Dataset:
+
+\scriptsize
+
+| **Variable** | **Description** | 
+|-----------|-----------|
+| Carat: | Weight of the diamond | 
+| Cut: | Quality of the diamond's cut |
+| Color: | Quality of the diamond's color |
+| Clarity: | Quality of how clear the diamond is |
+| Depth: | Total depth percentage |
+| Table: | Width of the top of the diamond relative to the widest point |
+| X: | Length of the diamond |
+| Y: | Width of the diamond |
+| Z: | Depth of the diamond |
+| Price (Target): | Price in U.S dollars of the diamond |
+
+```{r diamonds, echo = FALSE, results='hide'}
+glimpse(diamonds)
+summary(diamonds)
+```
+- The dataset contains 53,940 observations.
+- There are no missing values in the dataset and the column names are already standardized, saving us some cleaning steps.
+
+## Data Preparation
+
+### Outlier Detection:
+
+```{r, message=FALSE, warning=FALSE, fig.width=3, fig.height=1.5, out.width='75%', fig.align='center'}
+ggplot(diamonds, aes(y = price)) +
+  geom_boxplot(fill = "lightblue") +
+  labs(
+    title = "Outlier Detection in Diamond Prices",
+    subtitle = "Dots above whiskers show potential outliers",
+    y = "Price ($)"
+  ) +
+  theme_minimal(base_size = 9)
+```
+
+- The data seems to have a rather large number of outliers in terms of price.
+- However, these outliers could be the result of the dataset containing both luxury **and** non luxury diamonds included, and thus the less population of these groups is classified as an 'outlier' among the whole set.
+
+### Solution:
+\scriptsize
+
+By creating a new variable 'status', and assigning diamonds with prices below 8,500 dollars as 'Non-Luxury' and diamonds with prices above $8500 as 'Luxury', we can create a new categorical variable that can help seperate these potential groups.
+
+
+## Feature Enginneering
+
+### New Outlier Detection:
+
+```{r, echo = FALSE, results='hide'}
+diamonds_clean <- diamonds %>%
+  mutate(status=case_when(
+    price < 6000 ~ "Non-Luxury",
+    price >= 6000 ~ "Luxury",
+    TRUE ~ "Unknown"
+  ))
+```
+
+```{r, out.width="70%", message=FALSE, warning=FALSE,echo=FALSE, fig.align='center'}
+
+ggplot(diamonds_clean, aes(x = status, y = price, fill = status)) +
+  geom_boxplot() +
+  labs(title = "Outlier Detection in Diamond Prices: Luxury vs Non Luxury", x = "Diamond Status")
+
+```
+- It seems as though there are, in fact, 2 distinct groups of diamonds that are sold.
+
+### Other Steps:
+\scriptsize
+For additional clarity and ease of interpretation, for the 3 ordered factor variables (cut, color, clarity), I will convert them into a numeric scale, with 1 representing the 'worst' level in each.
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+diamonds2 <- diamonds_clean %>%
+  mutate(
+    cut_num = case_when(
+      cut == "Fair" ~ 1,
+      cut == "Good" ~ 2,
+      cut == "Very Good" ~ 3,
+      cut == "Premium" ~ 4,
+      cut == "Ideal" ~ 5,
+      TRUE ~ NA_real_
+    ),
+    color_num = case_when(
+      color == "J"    ~ 1,
+      color == "I"    ~ 2,
+      color == "H"    ~ 3,
+      color == "G"    ~ 4,
+      color == "F"    ~ 5,
+      color == "E"    ~ 6,
+      color == "D"    ~ 7,
+      TRUE ~ NA_real_
+    ),
+    clarity_num = case_when(
+      clarity == "I1"  ~ 1,
+      clarity == "SI2"  ~ 2,
+      clarity == "SI1"  ~ 3,
+      clarity == "VS2"  ~ 4,
+      clarity == "VS1"  ~ 5,
+      clarity == "VVS2"  ~ 6,
+      clarity == "VVS1"  ~ 7,
+      clarity == "IF"  ~ 8,
+      TRUE ~ NA_real_
+    )
+  )
+
+```
+
+## 2) Exploratory Data Analysis
+### Class Distribution:
+
+```{r, out.width="80%", message=FALSE, warning=FALSE,echo=FALSE, fig.align='center'}
+
+# ---- Distribution of Stroke Outcome ----
+ggplot(diamonds_clean, aes(x = status, fill = status)) +
+  geom_bar() +
+  labs(title = "Class Distribution: Luxury vs Non-Luxury",
+       x = "Status", y = "Count")
+
+```
+
+- There are many more Non-Luxury diamonds in the dataset than Luxury diamonds.
+
+## Exploratory Data Analysis
+### Price vs Carat Scatterplot:
+
+```{r, out.width="90%", message=FALSE, warning=FALSE,echo=FALSE, fig.align='center'}
+ggplot(diamonds2, aes(x = carat, y = price)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  labs(
+    title = "Price vs. Carat for All Diamonds",
+    subtitle = "Larger diamonds generally cost more, but with wide variation",
+    x = "Carat (Weight)",
+    y = "Price (USD)"
+  ) +
+  theme_minimal()
+```
+
+- Price seems to have a strong relationship with carat, although there are some large outliers and variance.
+
+## Exploratory Data Analysis
+
+### Length, Depth, and Height vs Price Scatterplots:
+
+```{r, out.width="45%", message=FALSE, warning=FALSE, fig.show='hold', echo=FALSE}
+ggplot(diamonds, aes(x = x, y = price)) +
+  geom_point(alpha = 0.3, color = "lightblue") +
+  labs(
+    title = "Price vs. Length",
+    x = "Length (mm)",
+    y = "Price (USD)"
+  ) +
+  theme_minimal()
+
+ggplot(diamonds, aes(x = y, y = price)) +
+  geom_point(alpha = 0.3, color = "lightblue") +
+  labs(
+    title = "Price vs. Height",
+    x = "Height (mm)",
+    y = "Price (USD)"
+  ) +
+  theme_minimal()
+```
+
+```{r, out.width="45%", message=FALSE, warning=FALSE, fig.align='center', echo=FALSE}
+ggplot(diamonds, aes(x = z, y = price)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  labs(
+    title = "Price vs. Depth",
+    x = "Depth (mm)" ,
+    y = "Price (USD)"
+  ) +
+  theme_minimal()
+```
+
+- Length, Width, and Depth all show similar relationships, though depth and height have large outliers.
+
+## Exploratory Data analysis
+
+### Diamond Cut, Color, and Clarity:
+
+```{r, out.width="45%", message=FALSE, warning=FALSE, fig.show='hold', echo=FALSE}
+
+ggplot(diamonds2, aes(x = cut_num, fill = status)) +
+  geom_bar() +
+  labs(title = "Class Distribution: Diamond Cut Rating",
+       x = "Cut Rating (1 to 5, 1=Worst, 5=Best)", y = "Count")
+
+ggplot(diamonds2, aes(x = color_num, fill = status)) +
+  geom_bar() +
+  labs(title = "Class Distribution: Diamond Color Rating",
+       x = "Color Rating (1 to 5, 1=Worst, 7=Best)", y = "Count")
+
+```
+
+```{r, out.width="45%", message=FALSE, warning=FALSE,echo=FALSE, fig.align='center'}
+
+# ---- Distribution of Stroke Outcome ----
+ggplot(diamonds2, aes(x = clarity_num, fill = status)) +
+  geom_bar() +
+  labs(title = "Class Distribution: Diamond Clarity Rating",
+       x = "Clarity Rating (1 to 5, 1=Worst, 8=Best)", y = "Count")
+
+```
+
+- Luxury and Non-Luxury appear to follow similar patterns. 
+
+## Exploratory Data Analysis
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+luxury <- filter(diamonds2, status == "Luxury")
+non_luxury <- filter(diamonds2, status == "Non-Luxury")
+```
+
+### Correlation Matrix: Non-Luxury Diamonds
+
+```{r, out.width="92%", message=FALSE, warning=FALSE,echo=FALSE, fig.align='center'}
+num_vars_non <- non_luxury[, sapply(non_luxury, is.numeric)]
+corr_matrix <- cor(num_vars_non, use = "complete.obs")
+corrplot(corr_matrix, method="color", type="upper",
+         tl.col="black", addCoef.col="black", number.cex=0.7)
+```
+
+- All variables but Depth and Table seem to affect price, and many have relationships with one another.
+
+## Exploratory Data Analysis
+
+### Correlation Matrix: Luxury Diamonds
+
+```{r, out.width="92%", message=FALSE, warning=FALSE,echo=FALSE, fig.align='center'}
+num_vars_lux <- luxury[, sapply(luxury, is.numeric)]
+corr_matrix <- cor(num_vars_lux, use = "complete.obs")
+corrplot(corr_matrix, method="color", type="upper",
+         tl.col="black", addCoef.col="black", number.cex=0.7)
+```
+
+- Results slightly different, but all variables but Depth and Table seem to affect price still, and many still have relationships with one another.
+
+## 3) Multiple Linear Regression Modeling
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+model_lux1 <- lm(price ~ carat + cut_num + color_num + clarity_num + x + y + z, data = luxury)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='show'}
+coefficients(model_lux1)
+```
+### Luxury Model 1
+
+### VIF: Luxury Model 1
+
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+car::vif(model_lux1)   # Variance Inflation Factor
+```
+- The VIF for carat, x, y, and z are incredibly high, and suggest multicollinearity. 
+- As shown in the correlation matrix, they are all highly correlated, which makes sense as the length, width, height, and weight of a diamond all relate to how big a diamond is.
+- As such, to reduce the chance of this multicollinearity affected the coefficients, I will remove x, y, and z from the model as they appear to be redundant and carat showed a higher correlation directly with price.
+
+## Multiple Linear Regression Modeling
+
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+model_lux2 <- lm(price ~ carat + cut_num + color_num + clarity_num, data = luxury)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+coefficients(model_lux1)
+```
+
+### Luxury Model 2
+
+### VIF: Luxury Model 2
+
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+car::vif(model_lux2)   # Variance Inflation Factor
+```
+
+- These values are much more reasonable, and suggests there is little multicollinearity that could be affecting the coefficients of the model.
+
+
+
+## Multiple Linear Regression Modeling
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+model_non1 <- lm(price ~ carat + cut_num + color_num + clarity_num + x + y + z, data = non_luxury)
+summary(model_non1)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+coefficients(model_non1)
+```
+### Non-Luxury Model 1
+
+### VIF: Non-Luxury Model 1
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+car::vif(model_non1)   # Variance Inflation Factor
+```
+
+- Much like our Luxury model, it seems like there is definitely multicollinearity between carat, x, y, and z.
+- They are actually even higher VIF values for this model, suggesting that they affect the coefficients of the model greatly.
+- The same process as for the luxury diamond model will be applied here.
+
+## Multiple Linear Regression Modeling
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='hide'}
+model_non2 <- lm(price ~ carat + cut_num + color_num + clarity_num, data = non_luxury)
+summary(model_non2)
+```
+
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+coefficients(model_non2)
+```
+
+### Non-Luxury Model 2
+
+### VIF: Non-Luxury Model 2
+```{r, message=FALSE, warning=FALSE, echo=TRUE, results='show'}
+car::vif(model_non2)   # Variance Inflation Factor
+```
+
+- Once again there has been a great improvement, and the VIF's for the non-luxury model are also incredibly low, which is a good sign.
+
+## 4) Model Evaluation and Comparison
+
+### Regression Diagnostic Plots for Luxury Diamonds Model:
+
+```{r, message=FALSE, warning=FALSE, fig.align='center', echo=FALSE, results='show'}
+# Show all four regression diagnostic plots
+par(mfrow = c(2, 2))
+plot(model_lux2)
+```
+
+- Overall it seems the assumption that the relationships of the model are linear holds, though the biggest impact on inferences made using the model is definitely the leverage of the outliers.
+
+## Model Evaluation and Comparison
+
+### Regression Diagnostic Plots for Non-Luxury Diamonds Model:
+
+```{r, message=FALSE, warning=FALSE, fig.align='center', echo=FALSE, results='show'}
+# Show all four regression diagnostic plots
+par(mfrow = c(2, 2))
+plot(model_non2)
+```
+
+- The graphs show about the same as the Luxury model, though it appears that outliers do not have as big of an impact here as they did for luxury diamonds.
+
+## Model Evaluation and Comparison
+
+### Evaluating R-Squared, Adjusted R-Squared, RMSE, and MAE:
+
+#### Evaluation Metrics for Luxury Model:
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='show'}
+summary(model_lux2)$r.squared           # R-squared
+summary(model_lux2)$adj.r.squared       # Adjusted R-squared
+sqrt(mean(residuals(model_lux2)^2))     # RMSE
+mean(abs(residuals(model_lux2)))        # MAE
+```
+
+- The Luxury Model captures about 77% of the variance of the data, showing that it is a somewhat strong predictive model and likely indicates actual real world trends.
+- The average error of the model ranges from 1,100 dollars to around 1,600 dollars per observation. This is likely due to the impact of outliers, shown by how the RMSE is much larger than the MAE.
+
+#### Evaluation Metrics for Non-Luxury Model:
+```{r, message=FALSE, warning=FALSE, echo=FALSE, results='show'}
+summary(model_non2)$r.squared           # R-squared
+summary(model_non2)$adj.r.squared       # Adjusted R-squared
+sqrt(mean(residuals(model_non2)^2))     # RMSE
+mean(abs(residuals(model_non2)))        # MAE
+```
+
+- The Luxury Model captures about 93% of the variance of the data, showing that it is an extremely strong predictive model and almost certainly aligns with real world trends.
+- The average error of the model ranges from 300 to 400 dollars per observation. The RMSE is also not much higher than the MAE, possibly meaning that outliers were not as prevalent or as powerful on non-luxury diamonds.
+
+## 5) Reccomendations and Reflections
+
+### Key Takeaways for Shareholders:
+
+- Both models were somewhat similar, although they did differ in a few different ways. This shows that there in fact *are* some differences in scale for how a diamond may get priced depending on whether it is a luxury or non-luxury diamond.
+- The main influential predictor for both was carat, and by using these models, diamond companies and their shareholders can get an idea on both what diamonds they should acquire for their target market, as well as an idea on how to then price the diamonds based on statistical trends in the market.
+- By doing so, it is possible that they may gain a slight edge in this very competitive and lucrative market.
+- While both models show good predictive performance, the non-luxury model shows an extremely high level of performance when compared to the luxury model.
+
+### Reflections:
+
+- It is important to also remember that in order to attempt to model 2 groups of diamonds, some cutoffs were made without considering every possibility. 
+- This may have caused high price outliers for non-luxury diamonds and low price outliers for luxury diamonds to be missing and not accounted for, which could possibly affect the model and results.
+- Considering the level of performance both models put out, however, splitting the data into two groups seems to have been more beneficial than harmful.
+
+## 6) Conclusion and Next Steps
+
+### Model Performance:
+
+- While both models proved to be effective, the model for non-luxury diamonds was by far more statistically significant, catching around 93% of the variance and with relatively low MAE and RMSE. 
+- The luxury diamond model, on the other hand, had both higher MAE and RMSE, as well as only capturing 77% of the variance of the data.
+- It is possible that this difference is due to several cultural factors, such as the pricing of diamonds labeled as 'luxury' being priced on things like name brands, cultural status, and other reasons.
+
+### Potential Next Steps:
+
+- While the data showed to have many linear interactions, it is possible that some methods of non-linear regression or unsupervised learning may be able to catch trends and interactions not found in this presentation.
+- Other methods of dealing with multicollinearity, such as combining the features together or using some regularization techniques such as lasso regression, may also give slightly better results when used.
+- Further standardization or even log transformations could reduce the impact of influential points on the models.
